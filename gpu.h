@@ -69,13 +69,14 @@ __global__ void dev_initArr(cufftComplex *data, int len);
 //data  : pointer to array which is to be initialized to 0
 //len   : number of complex points in the array
 
-__global__ void dev_demix(float *sbb, float *spb, int sigLen, int inPhase, float arg);
+__global__ void dev_demix(float *sbb, float *spb, int sigLen, int inPhase, float arg, float ph_off);
 //Performs the de-mixing step on the received signal
 //sbb   : pointer to the return array (signal at baseband)
 //spb   : pointer to the input array (signal at passband)
 //sigLen: number of points in the signal
 //inPhase : flag for in-phase/quad-phase. 1: in-phase portion; 0: quad-phase portion
 //arg   : argument of the sin/cos (calculate in main to avoid computation in kernel)
+//ph_off: phase offset
 
 __global__ void dev_downsample(float *syms, float *upsamp, int len, int offs, int N);
 //Performs the downsampling step on the filtered signal

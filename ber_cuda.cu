@@ -267,8 +267,8 @@ while(bit_errs < 100){
     cudaMemcpy(dev_sig, s_r, sigLen*sizeof(float), cudaMemcpyHostToDevice);
 
     //Receiver processing (demixing)
-    dev_demix<<<(sigLen+M-1)/M, M>>>(dev_sig_it, dev_sig, sigLen, 1, arg);
-    dev_demix<<<(sigLen+M-1)/M, M>>>(dev_sig_qt, dev_sig, sigLen, 0, arg);
+    dev_demix<<<(sigLen+M-1)/M, M>>>(dev_sig_it, dev_sig, sigLen, 1, arg, 0);
+    dev_demix<<<(sigLen+M-1)/M, M>>>(dev_sig_qt, dev_sig, sigLen, 0, arg, 0);
 
     //Timing offset detection/correction via Kurtosis
     minIdx = -1;

@@ -137,18 +137,18 @@ __global__ void dev_initArr(cufftComplex *data, int len){
     }
 }
 
-__global__ void dev_demix(float *sigBaseBand, float *sigPassBand, int sigLen, int inPhase, float arg){
+__global__ void dev_demix(float *sigBaseBand, float *sigPassBand, int sigLen, int inPhase, float arg, float ph_off){
     int tid = blockIdx.x*blockDim.x + threadIdx.x;
     int step = blockDim.x*gridDim.x;
     float sqrt2 = sqrtf(2);
     if(inPhase == 1){       //in-phase portion
         while(tid < sigLen){
-            sigBaseBand[tid] = sqrt2*cosf(arg*tid)*sigPassBand[tid];
+            sigBaseBand[tid] = sqrt2*cosf(arg*tid + ph_off)*sigPassBand[tid];
            tid += step;
         }
     }else{                  //quadrature phase portion
         while(tid < sigLen){
-            sigBaseBand[tid] =-sqrt2*sinf(arg*tid)*sigPassBand[tid];
+            sigBaseBand[tid] =-sqrt2*sinf(arg*tid + ph_off)*sigPassBand[tid];
            tid += step;
        }
     }

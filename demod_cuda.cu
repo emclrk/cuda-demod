@@ -256,8 +256,8 @@ int main(int argc, char *argv[]){
     cudaEventRecord(start);
     begin = clock();
 
-    dev_demix<<<(sigLen+M-1)/M,M>>>(dev_rsig_it, dev_sig, sigLen, 1, arg);
-    dev_demix<<<(sigLen+M-1)/M,M>>>(dev_rsig_qt, dev_sig, sigLen, 0, arg);
+    dev_demix<<<(sigLen+M-1)/M,M>>>(dev_rsig_it, dev_sig, sigLen, 1, arg, ph_off);
+    dev_demix<<<(sigLen+M-1)/M,M>>>(dev_rsig_qt, dev_sig, sigLen, 0, arg, ph_off);
 
     //Find min kurtosis; determine timing offset
     int minIdx = -1;
