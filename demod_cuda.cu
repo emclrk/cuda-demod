@@ -8,6 +8,7 @@ extern "C"{
 int main(int argc, char *argv[]){
 //---------------------------------------------------------------------------------//
 //QPSK parameters
+    srand(time(0));
     int T = 1;                          //symbol period
     int N = 5;                          //upsampling factor
     float Ts = T/(float)N;              //sample period
@@ -36,6 +37,7 @@ int main(int argc, char *argv[]){
     float max, max1;
     float cfo;
     float tau;
+    float t_off = (-.5 + (float)(rand()%1001)*1e-3)*N*T;
     int ind_rot, ind_cfo;
     int ind, ind1;
     int print_FLAG = 0;
@@ -45,7 +47,6 @@ int main(int argc, char *argv[]){
     int np = 5;
     int id = 4*nfft*.05/N;
     int i2 = nfft-id;
-    int cfft = pow(2, (int)log2((float)sigLen)+1);
 
     int M = 64;
     int blocksPerGrid = (nsym+M-1)/M;
@@ -94,20 +95,12 @@ int main(int argc, char *argv[]){
 //---------------------------------------------------------------------------------//
 //  Allocate device memory and setup cuFFT
     
-    cufftHandle plan, planf, plani;
+    cufftHandle plan;
     cufftResult res;
     res = cufftPlan1d(&plan, nfft, CUFFT_C2C, 1);
     if(res!=0) fprintf(stderr, "error creating plan, %d\n", res);
-    res = cufftPlan1d(&planf, cfft, CUFFT_R2C, 1);
-    if(res!=0) fprintf(stderr, "error creating plan, %d\n", res);
-    res = cufftPlan1d(&plani, cfft, CUFFT_C2R, 1);
-    if(res!=0) fprintf(stderr, "error creating plan, %d\n", res);
-
-    cufftComplex *dev_fftData, *dev_fftH, *dev_fftY, *dev_FFT;
+    cufftComplex *dev_fftData;
     cudaMalloc(&dev_fftData, nfft*sizeof(cuComplex)); //allocate room on device for cufft data
-    cudaMalloc(&dev_fftH, cfft*sizeof(cuComplex));
-    cudaMalloc(&dev_fftY, cfft*sizeof(cuComplex));
-    cudaMalloc(&dev_FFT,2*cfft*sizeof(cuComplex));
 
     cudaStream_t s1, s2;
     err = cudaStreamCreate(&s1);
@@ -217,7 +210,7 @@ int main(int argc, char *argv[]){
     }
 
     //Pass through pulse shaping filter
-    srrcDelay(pulse, alpha, (float)N, Lp, Ts, 0, 0);
+    srrcDelay(pulse, alpha, (float)N, Lp, Ts, t_off, 0);
     conv(sig_it, pulse, ups_it, filtLen, N*nsym);
     conv(sig_qt, pulse, ups_qt, filtLen, N*nsym);
 
@@ -250,9 +243,7 @@ int main(int argc, char *argv[]){
     cudaEvent_t start, stop;
     cudaEventCreate(&start);
     cudaEventCreate(&stop);
-    srand(time(0));
-    float v;
-    v = -.05 + (float)(rand()%1001)*1e-4;
+    float v = -.05 + (float)(rand()%1001)*1e-4;
     float ph_off = deg2rad(-45+(float)(rand()%101)*.9);
     float arg = 2*PI*(fc+v)*T/(float)N;
     float arg_cfo;
@@ -449,8 +440,6 @@ int main(int argc, char *argv[]){
 //---------------------------------------------------------------------------------//
 //  Cleanup
     cufftDestroy(plan);
-    cufftDestroy(planf);
-    cufftDestroy(plani);
     cudaEventDestroy(start);
     cudaEventDestroy(stop);
     cudaStreamDestroy(s1);
@@ -462,9 +451,6 @@ int main(int argc, char *argv[]){
     cudaFree(dev_syms);
     cudaFree(dev_convArr);
     cudaFree(dev_cmplxData);
-    cudaFree(dev_FFT);
-    cudaFree(dev_fftH);
-    cudaFree(dev_fftY);
     cudaFree(dev_fftData);
     cudaFree(dev_ym4);
     cudaFree(dev_ym2);

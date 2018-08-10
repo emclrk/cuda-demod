@@ -212,7 +212,7 @@ for(int x=0; x<nPts; x++){
     bit_errs = 0;
     total_bits = 0;
 while(bit_errs < 100){
-    t_offset = -.5 + (float)(rand()%1001)*1e-3;
+    t_offset = (-.5 + (float)(rand()%1001)*1e-3)*N*T;
     ph_off = deg2rad(-45+(float)(rand()%101)*.9);
     //Generate random stream of digital data
     for(int i=0;i<nsym*bps;i++)inbits[i] = rand()%2;    //random bits
