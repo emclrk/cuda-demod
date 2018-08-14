@@ -27,7 +27,7 @@ int main(int argc, char *argv[]){
     int nfilt =  5;                     //number of matched filters in filter bank
     int filtLen = 2*Lp*N+1;             //length of filters
     int sigLen = filtLen + N*nsym - 1;  //length of transmitted signal
-    int rot_method = 0;                 //0: kurtosis
+    int rot_method;                     //0: kurtosis 1: "min-max" method
     float snr;
     if(argc > 1)snr = atof(argv[1]);
     else snr = 8.0;
@@ -37,6 +37,7 @@ int main(int argc, char *argv[]){
     float max, max1;
     float cfo;
     float tau;
+    float minmax;
     float t_off = (-.5 + (float)(rand()%1001)*1e-3)*N*T;
     int ind_rot, ind_cfo;
     int ind, ind1;
@@ -45,6 +46,7 @@ int main(int argc, char *argv[]){
     int convLen = sigLen+filtLen-1;
     int nfft = pow(2, (int)log2((float)convLen)+1);
     int np = 5;
+    if(rot_method == 1)np = 7;         //seems to perform better with a few more phase points
     int id = 4*nfft*.05/N;
     int i2 = nfft-id;
 
@@ -173,8 +175,9 @@ int main(int argc, char *argv[]){
     dev_initArr<<<(2*convLen+M-1)/M, M>>>(dev_convArr, 2*nfilt*convLen);
 
     float kx, ky;
-    float *dev_rotArr, *dev_xrot, *dev_yrot;
+    float *dev_rotArr, *dev_xrot, *dev_yrot, *dev_trot;
     cudaMalloc(&dev_rotArr, np*nsym*2*sizeof(float));
+    cudaMalloc(&dev_trot, nsym*sizeof(float));
     
     //Build matched filter bank with various time delays
     for(int i=0; i<nfilt; i++) {
@@ -226,6 +229,8 @@ int main(int argc, char *argv[]){
     sigPow = sqrt(sigPow/sigLen);     //signal power(RMS)
     memcpy(s_r, s, sigLen*sizeof(float));
 
+//---------------------------------------------------------------------------------//
+//  Channel effects
     //Add white noise (AWGN channel)
     float nPow = clt(noise, sigLen, sigPow, snr);
     for(int i=0; i<sigLen; i++){
@@ -237,8 +242,6 @@ int main(int argc, char *argv[]){
         printf("act. snr: %f\n", 20*log10(sigPow/nPow));
     }
 
-//---------------------------------------------------------------------------------//
-//  Channel effects
     clock_t begin, end;
     cudaEvent_t start, stop;
     cudaEventCreate(&start);
@@ -378,6 +381,26 @@ int main(int argc, char *argv[]){
         }
         phi = -PI/4+ind_rot*PI/(2*(np-1));
         cudaMemcpy(rot, dev_rotArr+2*ind_rot*nsym, nsym*2*sizeof(float), cudaMemcpyDeviceToHost);
+    }else if(rot_method == 1){                          //"min-max" method (box)
+        ind_rot = -1;
+        minmax = 1e10;
+        for(int i=0; i<np; i++){
+            phi = -PI/4 + i*PI/(2*(np-1));
+            dev_xrot = dev_rotArr + 2*i*nsym;
+            dev_yrot = dev_rotArr + (2*i+1)*nsym;
+            dev_rotate<<<(nsym+M-1)/M,M>>>(dev_xrot, dev_yrot, dev_isyms, dev_qsyms, phi, nsym);
+            cudaMemcpy(dev_trot, dev_yrot, nsym*sizeof(float), cudaMemcpyDeviceToDevice);
+            dev_abs<<<(nsym+M-1)/M,M>>>(dev_trot, nsym);
+            dev_getMax<<<(nsym+M-1)/M,M>>>(dev_maxArr, dev_indArr, dev_trot, nsym);
+            dev_getMax<<<    1     ,M>>>(dev_max, dev_ind, dev_maxArr, M);
+            cudaMemcpy(&max, dev_max, sizeof(float), cudaMemcpyDeviceToHost);
+            if(max < minmax){
+                minmax = max;
+                ind_rot = i;
+            }
+        }
+        phi = -PI/4+ind_rot*PI/(2*(np-1));
+        cudaMemcpy(rot, dev_rotArr+2*ind_rot*nsym, nsym*2*sizeof(float), cudaMemcpyDeviceToHost);
     } else {                                            //no correction
         phi = 0;
         cudaMemcpy(rot, dev_syms, 2*nsym*sizeof(float), cudaMemcpyDeviceToHost);
@@ -470,6 +493,7 @@ int main(int argc, char *argv[]){
     cudaFree(dev_ind);
     cudaFree(dev_zeros);
     cudaFree(dev_rotArr);
+    cudaFree(dev_trot);
     cudaFree(pulse_bank);
     free(s_r);
     free(noise);

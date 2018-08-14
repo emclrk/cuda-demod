@@ -13,9 +13,9 @@ int main(int argc, char* argv[]){
     int nsym = 500;                     //number of symbols
     int bps = 2;                        //bits per symbol
     complx lut[4] = {                   //lookup table
-        (complx){1/sqrt(2),1/sqrt(2)}, 
-        (complx){-1/sqrt(2),1/sqrt(2)}, 
-        (complx){1/sqrt(2),-1/sqrt(2)}, 
+        (complx){1/sqrt(2),1/sqrt(2)},
+        (complx){-1/sqrt(2),1/sqrt(2)},
+        (complx){1/sqrt(2),-1/sqrt(2)},
         (complx){-1/sqrt(2),-1/sqrt(2)}};
     float alpha = 0.55;                 //excess bandwidth
     int Lp = 12;                        //pulse truncation length
@@ -25,8 +25,8 @@ int main(int argc, char* argv[]){
     int sigLen = filtLen + N*nsym - 1;  //length of transmitted signal
     int convLen = sigLen + filtLen - 1; //length of received, filtered signal
     int nfft = pow(2, (int)log2((float)convLen)+1);
-    int rot_method = 0;                 //0: kurtosis 1: no correction
-    int nfilt = 9;                      //number of matched filters in filter bank
+    int rot_method = 0;                 //0: kurtosis 1: min-max
+    int nfilt = 7;                      //number of matched filters in filter bank
     float snr;                          //signal-to-noise ratio
     float t_offset;                     //timing offset
     float v;                            //carrier frequency offset
@@ -38,6 +38,7 @@ int main(int argc, char* argv[]){
     float cfo, arg_cfo;
     float cos_mix, sin_mix;
     float arg = 2*PI*fc*T/(float)N;
+    float minmax;
     int ind_cfo, ind_rot;
     int ind, ind1;
     int minIdx;
@@ -211,7 +212,7 @@ for(int x=0; x<nPts; x++){
     snr = snr_arr[x];
     bit_errs = 0;
     total_bits = 0;
-while(bit_errs < 100){
+while(bit_errs < 1000){
     t_offset = (-.5 + (float)(rand()%1001)*1e-3)*N*T;
     ph_off = deg2rad(-45+(float)(rand()%101)*.9);
     //Generate random stream of digital data
@@ -365,15 +366,32 @@ while(bit_errs < 100){
         }
         phi = -PI/4+ind_rot*PI/(2*(np-1));
         dev_rotate<<<(nsym+M-1)/M,M>>>(dev_xr, dev_yr, dev_isyms, dev_qsyms, phi, nsym);
-
-//------------------------------------------------------------------------------------//
-//Push data back to host
-
+        cudaMemcpy(rot, dev_rot, 2*nsym*sizeof(float), cudaMemcpyDeviceToHost);
+    } else if(rot_method == 1) {                        //"min-max" method
+        ind_rot = -1; max = -1;
+        minmax = 1e10;
+        for(int i=0; i<np; i++){
+            phi = -PI/4 + i*PI/(2*(np-1));
+            dev_rotate<<<(nsym+M-1)/M,M>>>(dev_xr, dev_yr, dev_isyms, dev_qsyms, phi, nsym);
+            dev_abs<<<(nsym+M-1)/M,M>>>(dev_yr, nsym);
+            dev_getMax<<<(nsym+M-1)/M,M>>>(dev_maxArr, dev_indArr, dev_yr, nsym);
+            dev_getMax<<<    1     ,M>>>(dev_max, dev_ind, dev_maxArr, M);
+            cudaMemcpy(&max, dev_max, sizeof(float), cudaMemcpyDeviceToHost);
+            if(max < minmax){
+                minmax = max;
+                ind_rot = i;
+            }
+        }
+        phi = -PI/4+ind_rot*PI/(2*(np-1));
+        dev_rotate<<<(nsym+M-1)/M,M>>>(dev_xr, dev_yr, dev_isyms, dev_qsyms, phi, nsym);
         cudaMemcpy(rot, dev_rot, 2*nsym*sizeof(float), cudaMemcpyDeviceToHost);
     } else {                                            //no correction
         phi = 0;
         cudaMemcpy(rot, dev_syms, 2*nsym*sizeof(float), cudaMemcpyDeviceToHost);
     }
+
+//------------------------------------------------------------------------------------//
+//Push data back to host
 
     //Symbol decisions
     decisionBlk(deltOut, xr, yr, lut, nsym, bps);

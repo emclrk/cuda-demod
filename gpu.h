@@ -178,4 +178,6 @@ __global__ void dev_multConst(cuComplex *res, cuComplex *in, float scale, int le
 //scale : value by which the array is multiplied
 //len   : length of the input array
 
+__global__ void dev_abs(float *data, int len);
+
 #endif

@@ -392,3 +392,13 @@ __global__ void dev_multConst(cuComplex *res, cuComplex *in, float scale, int le
         tid += step;
     }
 }
+
+__global__ void dev_abs(float *data, int len){
+    int tid = blockIdx.x*blockDim.x + threadIdx.x;
+    int step = blockDim.x*gridDim.x;
+    while(tid < len){
+        if(data[tid] < 0)
+            data[tid] = -data[tid];
+        tid += step;
+    }
+}
