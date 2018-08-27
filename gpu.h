@@ -179,5 +179,6 @@ __global__ void dev_multConst(cuComplex *res, cuComplex *in, float scale, int le
 //len   : length of the input array
 
 __global__ void dev_abs(float *data, int len);
+//Returns the absolute value of the input data
 
 #endif

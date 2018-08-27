@@ -27,16 +27,6 @@ typedef struct{
     float pow;      //signal power
 }sigHead;
 
-typedef struct{
-    int len;        //length of noise vector
-    float pow;      //signal rms power
-    float mean;     //should be 0
-}noiseHdr;
-
-void fft842(int in, int n, complx x[]);
-//Function prototype for the fft842 function (courtesy Dr. Budge). See fft842.c for more info
-void fftCleanup();
-//Function prototype to clear fft memory
 void diffenc(int *inbits, int *delta, int nbits);
 //Performs differential encoding
 //inbits: pointer to an array of input bits

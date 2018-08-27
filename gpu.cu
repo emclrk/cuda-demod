@@ -23,6 +23,8 @@ __global__ void dev_convMult(float *convArr, float *filter, float *dataArr, int 
     int N  = filtLen;                //size of block and # of accumulators
     int str = blockDim.x*blockIdx.x;
     int end = blockDim.x*(blockIdx.x+1)+N;
+    __shared__ float filt[1024];
+    if(l<N)filt[l] = filter[l];
     float x;
     register float acc = 0.f;
     while(tid < end){
@@ -31,7 +33,7 @@ __global__ void dev_convMult(float *convArr, float *filter, float *dataArr, int 
             x = dataArr[tid];
         else
             x = 0.0;
-        acc += filter[m]*x;
+        acc += filt[m]*x;
         if(m == 0){
             if(tid>= str && tid < sigLen){
                 convArr[tid] = acc;
