@@ -9,18 +9,28 @@ int main(int argc, char *argv[]){
 //---------------------------------------------------------------------------------//
 //QPSK parameters
     srand(time(0));
+    bool sync_flag = 1;                 //toggle time & phase synchronization
+    bool awgn_flag = 1;                 //toggle noise
+    bool sig_flag = 1;                  //toggle signal
     int T = 1;                          //symbol period
     int N = 5;                          //upsampling factor
     float Ts = T/(float)N;              //sample period
-    float fc = 1.5;                     //carrier frequency
+    float fc = 0.25/Ts;                 //carrier frequency
     int nsym = 500;                     //number of symbols
     int bps = 2;                        //bits per symbol
-    complx lut[4] = {                           //lookup table
-        (complx){ 1/sqrt(2), 1/sqrt(2)}, 
-        (complx){-1/sqrt(2), 1/sqrt(2)}, 
-        (complx){ 1/sqrt(2),-1/sqrt(2)}, 
-        (complx){-1/sqrt(2),-1/sqrt(2)}};
-    float alpha = 0.55;                 //excess bandwidth
+    complx lut[4];                      //lookup table
+    if(sig_flag == 1){
+        lut[0] = (complx){ 1/sqrt(2), 1/sqrt(2)};
+        lut[1] = (complx){-1/sqrt(2), 1/sqrt(2)}; 
+        lut[2] = (complx){ 1/sqrt(2),-1/sqrt(2)}; 
+        lut[3] = (complx){-1/sqrt(2),-1/sqrt(2)};
+    } else {
+        lut[0] = (complx){0, 0};
+        lut[1] = (complx){0, 0};
+        lut[2] = (complx){0, 0};
+        lut[3] = (complx){0, 0};
+    }
+    float alpha = 0.5;                  //excess bandwidth
     int Lp = 12;                        //pulse truncation length
     int offs = Lp*2;                    //# of transient samples from filtering
     int nbits = nsym*bps;               //number of bits in signal 
@@ -28,7 +38,7 @@ int main(int argc, char *argv[]){
     int filtLen = 2*Lp*N+1;             //length of filters
     int sigLen = filtLen + N*nsym - 1;  //length of transmitted signal
     int rot_method;                     //0: kurtosis 1: "min-max" method
-    float snr;
+    float snr, nvar;
     if(argc > 1)snr = atof(argv[1]);
     else snr = 8.0;
     if(argc > 2)rot_method=atoi(argv[2]);
@@ -38,7 +48,18 @@ int main(int argc, char *argv[]){
     float cfo;
     float tau;
     float minmax;
-    float t_off = (-.5 + (float)(rand()%1001)*1e-3)*N*T;
+    float t_off, v, ph_off;
+    if(sync_flag == 1){
+      t_off = (-.5 + (float)(rand()%1001)*1e-3)*N*T;
+      //v = -.05 + (float)(rand()%1001)*1e-4;
+      v = -.0125 + (float)(rand()%1001)*2.5e-5;
+      ph_off = deg2rad(-45+(float)(rand()%101)*.9);
+    }else{
+      t_off = -N*T/2.0;
+      v = 0;
+      ph_off = 0;
+      rot_method = -1;
+    }
     int ind_rot, ind_cfo;
     int ind, ind1;
     int print_FLAG = 0;
@@ -46,7 +67,7 @@ int main(int argc, char *argv[]){
     int convLen = sigLen+filtLen-1;
     int nfft = pow(2, (int)log2((float)convLen)+1);
     int np = 5;
-    if(rot_method == 1)np = 7;         //seems to perform better with a few more phase points
+    if(rot_method == 1)np = 7;
     int id = 4*nfft*.05/N;
     int i2 = nfft-id;
 
@@ -219,35 +240,29 @@ int main(int argc, char *argv[]){
 
 
     //Modulate I by cos and Q by sin; sum together to produce transmitted waveform
-    float sigPow = 0;
     for(int i=0; i<sigLen; i++){
         cos_mix[i] = sqrt(2)*cos(2*PI*fc*T*i/N)*sig_it[i];
         sin_mix[i] =-sqrt(2)*sin(2*PI*fc*T*i/N)*sig_qt[i];
         s[i] = cos_mix[i] + sin_mix[i];
-        sigPow += s[i]*s[i];
     }
-    sigPow = sqrt(sigPow/sigLen);     //signal power(RMS)
-    memcpy(s_r, s, sigLen*sizeof(float));
 
 //---------------------------------------------------------------------------------//
 //  Channel effects
     //Add white noise (AWGN channel)
-    float nPow = clt(noise, sigLen, sigPow, snr);
-    for(int i=0; i<sigLen; i++){
-        s_r[i] += noise[i];
-    }
-    if(print_FLAG>0){
-        printf("%f\n", snr);
-        printf("target snr: %f\n", snr);
-        printf("act. snr: %f\n", 20*log10(sigPow/nPow));
+    if(awgn_flag == 1){
+        nvar = .5 * pow(10, -(float)snr/10.0);
+        boxmuller(noise, sigLen, 0, nvar);
+        for(int i=0; i<sigLen; i++){
+            s_r[i] = s[i] + noise[i];
+        }
+    }else{
+        memcpy(s_r, s, sigLen*sizeof(float));
     }
 
     clock_t begin, end;
     cudaEvent_t start, stop;
     cudaEventCreate(&start);
     cudaEventCreate(&stop);
-    float v = -.05 + (float)(rand()%1001)*1e-4;
-    float ph_off = deg2rad(-45+(float)(rand()%101)*.9);
     float arg = 2*PI*(fc+v)*T/(float)N;
     float arg_cfo;
 
@@ -288,123 +303,128 @@ int main(int argc, char *argv[]){
     }
 
     //Get minimum kurtosis
-    dev_getMin<<<1, threadsPerBlk>>>(dev_minArr, dev_idxArr, dev_kurtArr, nfilt);
-    cudaMemcpy(&minIdx, dev_idxArr, sizeof(int), cudaMemcpyDeviceToHost);
+    if(sync_flag == 1){
+      dev_getMin<<<1, threadsPerBlk>>>(dev_minArr, dev_idxArr, dev_kurtArr, nfilt);
+      cudaMemcpy(&minIdx, dev_idxArr, sizeof(int), cudaMemcpyDeviceToHost);
+    }else{
+      minIdx = 0;
+    }
 
     //Select filtered signal with the appropriate timing offset
     dev_ups_it = dev_convArr + 2*minIdx*convLen;
     dev_ups_qt = dev_ups_it + convLen;
 
     cudaMemcpy(dev_offs, dev_ups_it, convLen*2*sizeof(float), cudaMemcpyDeviceToDevice);
+    if(sync_flag == 1){
+      //Carrier frequency offset correction
+      assert(nfft>=convLen);
+      dev_cmplxPow4<<<(convLen+M-1)/M, M>>>(dev_cmplxData, dev_ups_it, dev_ups_qt, convLen);
+      
+      //Find the frequency peak of y^4
+      dev_initArr<<<(nfft+M-1)/M, M>>>(dev_fftData, nfft);                            //initialize data array with 0s
+      dev_initArr<<<(id+M-1)/M,   M>>>(dev_maxArr, M);
+      cudaMemcpy(dev_fftData, dev_cmplxData, convLen*sizeof(cufftComplex), cudaMemcpyDeviceToDevice);
 
-    //Carrier frequency offset correction
-    assert(nfft>=convLen);
-    dev_cmplxPow4<<<(convLen+M-1)/M, M>>>(dev_cmplxData, dev_ups_it, dev_ups_qt, convLen);
-    
-    //Find the frequency peak of y^4
-    dev_initArr<<<(nfft+M-1)/M, M>>>(dev_fftData, nfft);                            //initialize data array with 0s
-    dev_initArr<<<(id+M-1)/M,   M>>>(dev_maxArr, M);
-    cudaMemcpy(dev_fftData, dev_cmplxData, convLen*sizeof(cufftComplex), cudaMemcpyDeviceToDevice);
+      res = cufftExecC2C(plan, dev_fftData, dev_fftData, CUFFT_FORWARD); //**
+      if(res != 0) fprintf(stderr, "Error in fft execution %d\n", res);
+      dev_magComplx<<<(nfft+M-1)/M, M>>>(dev_y4mag, dev_fftData, nfft);
+      ind_cfo = -1; max = -1, max1 = -1;
 
-    res = cufftExecC2C(plan, dev_fftData, dev_fftData, CUFFT_FORWARD); //**
-    if(res != 0) fprintf(stderr, "Error in fft execution %d\n", res);
-    dev_magComplx<<<(nfft+M-1)/M, M>>>(dev_y4mag, dev_fftData, nfft);
-    ind_cfo = -1; max = -1, max1 = -1;
+      //Get maximum value between 0 and .05
+      dev_getMax<<<(id+M-1)/M,M>>>(dev_maxArr, dev_indArr, dev_y4mag, id);
+      dev_getMax<<<    1     ,M>>>(dev_max, dev_ind, dev_maxArr, M);
 
-    //Get maximum value between 0 and .05
-    dev_getMax<<<(id+M-1)/M,M>>>(dev_maxArr, dev_indArr, dev_y4mag, id);
-    dev_getMax<<<    1     ,M>>>(dev_max, dev_ind, dev_maxArr, M);
+      cudaMemcpy(&max, dev_max, sizeof(float), cudaMemcpyDeviceToHost);
+      cudaMemcpy(&ind, dev_ind, sizeof(int),  cudaMemcpyDeviceToHost);
 
-    cudaMemcpy(&max, dev_max, sizeof(float), cudaMemcpyDeviceToHost);
-    cudaMemcpy(&ind, dev_ind, sizeof(int),  cudaMemcpyDeviceToHost);
+      //Get maximum value between -.05 and 0
+      dev_getMax<<<(id+M-1)/M,M>>>(dev_maxArr, dev_indArr1, (dev_y4mag+i2), id);
+      dev_getMax<<<    1     ,M>>>(dev_max, dev_ind, dev_maxArr, M);
 
-    //Get maximum value between -.05 and 0
-    dev_getMax<<<(id+M-1)/M,M>>>(dev_maxArr, dev_indArr1, (dev_y4mag+i2), id);
-    dev_getMax<<<    1     ,M>>>(dev_max, dev_ind, dev_maxArr, M);
+      cudaMemcpy(&max1, dev_max, sizeof(float), cudaMemcpyDeviceToHost);
+      cudaMemcpy(&ind1, dev_ind, sizeof(int),   cudaMemcpyDeviceToHost);
 
-    cudaMemcpy(&max1, dev_max, sizeof(float), cudaMemcpyDeviceToHost);
-    cudaMemcpy(&ind1, dev_ind, sizeof(int),   cudaMemcpyDeviceToHost);
+      //Take the largest of the maximums
+      if(max > max1){
+          cudaMemcpy(&ind_cfo, (dev_indArr+ind), sizeof(int), cudaMemcpyDeviceToHost);
+      }else{
+          cudaMemcpy(&ind_cfo, (dev_indArr1+ind1), sizeof(int), cudaMemcpyDeviceToHost);
+          ind_cfo = ind_cfo + i2 - nfft;
+      }
 
-    //Take the largest of the maximums
-    if(max > max1){
-        cudaMemcpy(&ind_cfo, (dev_indArr+ind), sizeof(int), cudaMemcpyDeviceToHost);
-    }else{
-        cudaMemcpy(&ind_cfo, (dev_indArr1+ind1), sizeof(int), cudaMemcpyDeviceToHost);
-        ind_cfo = ind_cfo + i2 - nfft;
+      //Perform the frequency offset correction
+      cfo = -(float)ind_cfo*(float)N/(4.0*nfft); 
+      arg_cfo = 2*PI*T*cfo/(float)N;
+      dev_cfo<<<(convLen+M-1)/M, M, 0, s1>>>(dev_ups_it, dev_ups_qt, dev_it_offs, dev_qt_offs, arg_cfo, convLen); //de-mix
     }
-
-    //Perform the frequency offset correction
-    cfo = -(float)ind_cfo*(float)N/(4.0*nfft); 
-    arg_cfo = 2*PI*T*cfo/(float)N;
-    dev_cfo<<<(convLen+M-1)/M, M, 0, s1>>>(dev_ups_it, dev_ups_qt, dev_it_offs, dev_qt_offs, arg_cfo, convLen); //de-mix
 
     //Downsample
     dev_downsample<<<(nsym+M-1)/M, M, 0, s1>>>(dev_isyms, dev_ups_it, nsym, offs, N);
     dev_downsample<<<(nsym+M-1)/M, M, 0, s2>>>(dev_qsyms, dev_ups_qt, nsym, offs, N);
 
     //Phase offset correction (multiple methods)
-    if(rot_method == 0){                                //0: kurtosis
-        float k=0, kmin;
-        kmin = 1e4; ind_rot = -1;
-        for(int i=0; i<np; i++){
-            phi = -PI/4 + i*PI/(2*(np-1));
-            //Perform the rotation
-            dev_xrot = dev_rotArr + 2*i*nsym;
-            dev_yrot = dev_rotArr + (2*i+1)*nsym;
-            dev_rotate<<<(nsym+M-1)/M,M>>>(dev_xrot, dev_yrot, dev_isyms, dev_qsyms, phi, nsym);
+      if(rot_method == 0){                                //0: kurtosis
+          float k=0, kmin;
+          kmin = 1e4; ind_rot = -1;
+          for(int i=0; i<np; i++){
+              phi = -PI/4 + i*PI/(2*(np-1));
+              //Perform the rotation
+              dev_xrot = dev_rotArr + 2*i*nsym;
+              dev_yrot = dev_rotArr + (2*i+1)*nsym;
+              dev_rotate<<<(nsym+M-1)/M,M>>>(dev_xrot, dev_yrot, dev_isyms, dev_qsyms, phi, nsym);
 
-            //Real kurtosis on in-phase branch
-            dev_cmplxKSums<<<blocksPerGrid, threadsPerBlk>>>(dev_ym4, dev_ym2, dev_y2r, dev_y2i, dev_xrot, dev_zeros, nsym);
-            dev_getSum<<<1, threadsPerBlk, 0, s1>>>(dev_ym4Sum, dev_ym4, blocksPerGrid);
-            dev_getSum<<<1, threadsPerBlk, 0, s2>>>(dev_ym2Sum, dev_ym2, blocksPerGrid);
-            dev_getSum<<<1, threadsPerBlk, 0, s1>>>(dev_y2rSum, dev_y2r, blocksPerGrid);
-            dev_getSum<<<1, threadsPerBlk, 0, s2>>>(dev_y2iSum, dev_y2i, blocksPerGrid);
-            dev_cmplxKurt<<<1, threadsPerBlk>>>(dev_kurt, dev_ym4Sum, dev_ym2Sum, dev_y2rSum, dev_y2iSum, nsym);
-            cudaMemcpy(&kx, dev_kurt, sizeof(float), cudaMemcpyDeviceToHost);
+              //Real kurtosis on in-phase branch
+              dev_cmplxKSums<<<blocksPerGrid, threadsPerBlk>>>(dev_ym4, dev_ym2, dev_y2r, dev_y2i, dev_xrot, dev_zeros, nsym);
+              dev_getSum<<<1, threadsPerBlk, 0, s1>>>(dev_ym4Sum, dev_ym4, blocksPerGrid);
+              dev_getSum<<<1, threadsPerBlk, 0, s2>>>(dev_ym2Sum, dev_ym2, blocksPerGrid);
+              dev_getSum<<<1, threadsPerBlk, 0, s1>>>(dev_y2rSum, dev_y2r, blocksPerGrid);
+              dev_getSum<<<1, threadsPerBlk, 0, s2>>>(dev_y2iSum, dev_y2i, blocksPerGrid);
+              dev_cmplxKurt<<<1, threadsPerBlk>>>(dev_kurt, dev_ym4Sum, dev_ym2Sum, dev_y2rSum, dev_y2iSum, nsym);
+              cudaMemcpy(&kx, dev_kurt, sizeof(float), cudaMemcpyDeviceToHost);
 
-            //Real kurtosis on quad-phase branch
-            dev_cmplxKSums<<<blocksPerGrid, threadsPerBlk>>>(dev_ym4, dev_ym2, dev_y2r, dev_y2i, dev_yrot, dev_zeros, nsym);
-            dev_getSum<<<1, threadsPerBlk, 0, s1>>>(dev_ym4Sum, dev_ym4, blocksPerGrid);
-            dev_getSum<<<1, threadsPerBlk, 0, s2>>>(dev_ym2Sum, dev_ym2, blocksPerGrid);
-            dev_getSum<<<1, threadsPerBlk, 0, s1>>>(dev_y2rSum, dev_y2r, blocksPerGrid);
-            dev_getSum<<<1, threadsPerBlk, 0, s2>>>(dev_y2iSum, dev_y2i, blocksPerGrid);
-            dev_cmplxKurt<<<1, threadsPerBlk>>>(dev_kurt, dev_ym4Sum, dev_ym2Sum, dev_y2rSum, dev_y2iSum, nsym);
-            cudaMemcpy(&ky, dev_kurt, sizeof(float), cudaMemcpyDeviceToHost);
+              //Real kurtosis on quad-phase branch
+              dev_cmplxKSums<<<blocksPerGrid, threadsPerBlk>>>(dev_ym4, dev_ym2, dev_y2r, dev_y2i, dev_yrot, dev_zeros, nsym);
+              dev_getSum<<<1, threadsPerBlk, 0, s1>>>(dev_ym4Sum, dev_ym4, blocksPerGrid);
+              dev_getSum<<<1, threadsPerBlk, 0, s2>>>(dev_ym2Sum, dev_ym2, blocksPerGrid);
+              dev_getSum<<<1, threadsPerBlk, 0, s1>>>(dev_y2rSum, dev_y2r, blocksPerGrid);
+              dev_getSum<<<1, threadsPerBlk, 0, s2>>>(dev_y2iSum, dev_y2i, blocksPerGrid);
+              dev_cmplxKurt<<<1, threadsPerBlk>>>(dev_kurt, dev_ym4Sum, dev_ym2Sum, dev_y2rSum, dev_y2iSum, nsym);
+              cudaMemcpy(&ky, dev_kurt, sizeof(float), cudaMemcpyDeviceToHost);
 
-            k = kx + ky;
-            //assert(k<0);
-            if(k >= 0) fprintf(stderr, "kurtosis not < 0: %f\n", k);
-            if(k < kmin){
-                kmin = k;
-                ind_rot = i;
-            }
+              k = kx + ky;
+              //assert(k<0);
+              if(k >= 0) fprintf(stderr, "kurtosis not < 0: %f\n", k);
+              if(k < kmin){
+                  kmin = k;
+                  ind_rot = i;
+              }
+          }
+          phi = -PI/4+ind_rot*PI/(2*(np-1));
+          cudaMemcpy(rot, dev_rotArr+2*ind_rot*nsym, nsym*2*sizeof(float), cudaMemcpyDeviceToHost);
+      }else if(rot_method == 1){                          //"min-max" method (box)
+          ind_rot = -1;
+          minmax = 1e10;
+          for(int i=0; i<np; i++){
+              phi = -PI/4 + i*PI/(2*(np-1));
+              dev_xrot = dev_rotArr + 2*i*nsym;
+              dev_yrot = dev_rotArr + (2*i+1)*nsym;
+              dev_rotate<<<(nsym+M-1)/M,M>>>(dev_xrot, dev_yrot, dev_isyms, dev_qsyms, phi, nsym);
+              cudaMemcpy(dev_trot, dev_yrot, nsym*sizeof(float), cudaMemcpyDeviceToDevice);
+              dev_abs<<<(nsym+M-1)/M,M>>>(dev_trot, nsym);
+              dev_getMax<<<(nsym+M-1)/M,M>>>(dev_maxArr, dev_indArr, dev_trot, nsym);
+              dev_getMax<<<    1     ,M>>>(dev_max, dev_ind, dev_maxArr, M);
+              cudaMemcpy(&max, dev_max, sizeof(float), cudaMemcpyDeviceToHost);
+              if(max < minmax){
+                  minmax = max;
+                  ind_rot = i;
+              }
+          }
+          phi = -PI/4+ind_rot*PI/(2*(np-1));
+          cudaMemcpy(rot, dev_rotArr+2*ind_rot*nsym, nsym*2*sizeof(float), cudaMemcpyDeviceToHost);
+        } else {                                            //no correction
+            phi = 0;
+            cudaMemcpy(rot, dev_syms, 2*nsym*sizeof(float), cudaMemcpyDeviceToHost);
         }
-        phi = -PI/4+ind_rot*PI/(2*(np-1));
-        cudaMemcpy(rot, dev_rotArr+2*ind_rot*nsym, nsym*2*sizeof(float), cudaMemcpyDeviceToHost);
-    }else if(rot_method == 1){                          //"min-max" method (box)
-        ind_rot = -1;
-        minmax = 1e10;
-        for(int i=0; i<np; i++){
-            phi = -PI/4 + i*PI/(2*(np-1));
-            dev_xrot = dev_rotArr + 2*i*nsym;
-            dev_yrot = dev_rotArr + (2*i+1)*nsym;
-            dev_rotate<<<(nsym+M-1)/M,M>>>(dev_xrot, dev_yrot, dev_isyms, dev_qsyms, phi, nsym);
-            cudaMemcpy(dev_trot, dev_yrot, nsym*sizeof(float), cudaMemcpyDeviceToDevice);
-            dev_abs<<<(nsym+M-1)/M,M>>>(dev_trot, nsym);
-            dev_getMax<<<(nsym+M-1)/M,M>>>(dev_maxArr, dev_indArr, dev_trot, nsym);
-            dev_getMax<<<    1     ,M>>>(dev_max, dev_ind, dev_maxArr, M);
-            cudaMemcpy(&max, dev_max, sizeof(float), cudaMemcpyDeviceToHost);
-            if(max < minmax){
-                minmax = max;
-                ind_rot = i;
-            }
-        }
-        phi = -PI/4+ind_rot*PI/(2*(np-1));
-        cudaMemcpy(rot, dev_rotArr+2*ind_rot*nsym, nsym*2*sizeof(float), cudaMemcpyDeviceToHost);
-    } else {                                            //no correction
-        phi = 0;
-        cudaMemcpy(rot, dev_syms, 2*nsym*sizeof(float), cudaMemcpyDeviceToHost);
-    }
 
 //---------------------------------------------------------------------------------//
 //  Push data back to CPU
@@ -448,6 +468,7 @@ int main(int argc, char *argv[]){
     printf("-----------------\n");
     tau = -N*T/2.0 + N*(float)T*minIdx/(float)(nfilt-1);
     printf("Est. delay: %f/T \n", tau/(float)N);
+    printf("Act. delay: %f/T \n", t_off/(float)N);
     printf("Est. freq offset: %f\n", -cfo);
     printf("Act. freq offset: %f\n", v);
     printf("Est. phase offset: %f\n", rad2deg(phi));

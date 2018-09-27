@@ -31,7 +31,7 @@ int main(int argc, char* argv[]){
     float t_offset;                     //timing offset
     float v;                            //carrier frequency offset
     float ph_off;                       //phase offset
-    float sigPow, nPow;
+    float nvar;                         //noise variance
     float phi, tau;
     float k, kmin, max, max1;
     float kx, ky;
@@ -210,6 +210,7 @@ begin = clock();
 for(int x=0; x<nPts; x++){
     v = -.05 + (float)(rand()%1001)*1e-4;
     snr = snr_arr[x];
+    nvar = .5 * pow(10, -(float)snr/10.0);
     bit_errs = 0;
     total_bits = 0;
 while(bit_errs < 1000){
@@ -238,28 +239,18 @@ while(bit_errs < 1000){
     cudaMemcpy(sig, dev_signal, 2*sigLen*sizeof(float), cudaMemcpyDeviceToHost);
 
     //Modulate I by cos and Q by sin; sum together to produce transmitted waveform
-    sigPow = 0;
     for(int i=0; i<sigLen; i++){
         cos_mix = sqrt(2)*cos(2*PI*(fc+v)*T*i/N + ph_off)*sig_it[i];
         sin_mix =-sqrt(2)*sin(2*PI*(fc+v)*T*i/N + ph_off)*sig_qt[i];
         s_r[i] = cos_mix + sin_mix;
-        sigPow += s_r[i]*s_r[i];
     }
-    sigPow = sqrt(sigPow/sigLen);     //signal power(RMS)
 
 //------------------------------------------------------------------------------------//
 //Channel noise
 
-    nPow = clt(noise, sigLen, sigPow, snr);
+    boxmuller(noise, sigLen, 0, nvar);
     for(int i=0; i<sigLen; i++){
         s_r[i] += noise[i];
-    }
-
-    if(print_FLAG>0){
-        printf("sig power: %f\n", sigPow);
-        printf("noise power: %f\n", nPow);
-        printf("target snr: %f\n", snr);
-        printf("act. snr: %f\n", 20*log10(sigPow/nPow));
     }
 
 //------------------------------------------------------------------------------------//
